@@ -131,6 +131,7 @@ pub struct Target {
     abi: Option<Abi>,
 }
 
+///
 /// A Rust representation for the inputs of the setup-rust action.
 /// More information can be found [here](https://github.com/actions-rust-lang/setup-rust-toolchain/blob/main/action.yml).
 /// NOTE: The public API should be close to the original action as much as
