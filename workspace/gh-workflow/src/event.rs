@@ -2,8 +2,6 @@ use derive_setters::Setters;
 use merge::Merge;
 use serde::{Deserialize, Serialize};
 
-use crate::SetEvent;
-
 #[derive(Default, Setters, Debug, Serialize, Deserialize, Clone, Merge, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[setters(strip_option)]
@@ -37,14 +35,9 @@ impl Event<PullRequestTarget> {
     }
 }
 
-impl<A: Into<EventValue>> SetEvent for Event<A> {
-    fn apply(self, mut workflow: crate::Workflow) -> crate::Workflow {
-        let mut on: EventValue = self.0.into();
-        if let Some(other) = workflow.on {
-            on.merge(other);
-        }
-        workflow.on = Some(on);
-        workflow
+impl<A: Into<EventValue>> From<Event<A>> for EventValue {
+    fn from(value: Event<A>) -> Self {
+        value.0.into()
     }
 }
 
@@ -149,5 +142,26 @@ impl Event<PullRequestTarget> {
 impl From<PullRequestTarget> for EventValue {
     fn from(value: PullRequestTarget) -> Self {
         EventValue::default().pull_request_target(value)
+    }
+}
+
+pub struct Combine(EventValue);
+
+impl<T> Event<T> {
+    pub fn combine<U>(self, other: Event<U>) -> Event<Combine>
+    where
+        T: Into<EventValue>,
+        U: Into<EventValue>,
+    {
+        let mut l: EventValue = self.0.into();
+        let r: EventValue = other.0.into();
+        l.merge(r);
+        Event(Combine(l))
+    }
+}
+
+impl From<Combine> for EventValue {
+    fn from(value: Combine) -> Self {
+        value.0
     }
 }

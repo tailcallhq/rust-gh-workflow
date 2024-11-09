@@ -2,7 +2,10 @@
 
 use std::fmt::{Display, Formatter};
 
-use crate::{Job, SetEnv, Step, Workflow};
+use indexmap::IndexMap;
+use serde_json::Value;
+
+use crate::Env;
 
 #[derive(Clone)]
 pub enum RustFlags {
@@ -65,29 +68,10 @@ impl Display for RustFlags {
     }
 }
 
-impl SetEnv<Job> for RustFlags {
-    fn apply(self, mut value: Job) -> Job {
-        let mut env = value.env.unwrap_or_default();
-        env.insert("RUSTFLAGS".to_string(), self.to_string());
-        value.env = Some(env);
-        value
-    }
-}
-
-impl SetEnv<Workflow> for RustFlags {
-    fn apply(self, mut value: Workflow) -> Workflow {
-        let mut env = value.env.unwrap_or_default();
-        env.insert("RUSTFLAGS".to_string(), self.to_string());
-        value.env = Some(env);
-        value
-    }
-}
-
-impl<T> SetEnv<Step<T>> for RustFlags {
-    fn apply(self, mut value: Step<T>) -> Step<T> {
-        let mut env = value.env.unwrap_or_default();
-        env.insert("RUSTFLAGS".to_string(), self.to_string());
-        value.env = Some(env);
-        value
+impl From<RustFlags> for Env {
+    fn from(value: RustFlags) -> Self {
+        let mut env = IndexMap::default();
+        env.insert("RUSTFLAGS".to_string(), Value::from(value.to_string()));
+        Env::from(env)
     }
 }
