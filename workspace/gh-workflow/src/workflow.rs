@@ -57,6 +57,77 @@ impl Workflow {
         Ok(serde_yaml::to_string(self)?)
     }
 
+    pub fn autorelease_crate(self) -> Self {
+        let mut workflow = self;
+        let draft_release = Job::new("Draft release")
+            .if_condition(Expression::new(
+                "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+            ))
+            .permissions(Permissions::write())
+            .add_step(Step::checkout())
+            .add_step(
+                Step::uses("release-drafter", "release-drafter", 6)
+                    .id("create_release".to_string())
+                    .env(("GITHUB_TOKEN", "${{ secrets.GITHUB_TOKEN }}"))
+                    .with(("config-name", "release-drafter.yml")),
+            )
+            .add_step(
+                Step::run(
+                    r#"echo "create_release_name=${{ steps.create_release.outputs.name }}" >> $GITHUB_OUTPUT && echo "create_release_id=${{ steps.create_release.outputs.id }}" >> $GITHUB_OUTPUT"#,
+                )
+                    .id("set_output".to_string())
+                    .name("Set Output for Later Jobs"),
+            )
+            .outputs((
+                "create_release_name",
+                "${{ steps.set_output.outputs.create_release_name }}",
+            ))
+            .outputs((
+                "create_release_id",
+                "${{ steps.set_output.outputs.create_release_id }}",
+            ));
+
+        let release_job = Job::new("Create release")
+            .if_condition(Expression::new(
+                "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+            ))
+            .add_step(Step::checkout())
+            .add_step(Step::setup_rust().with_stable_toolchain())
+            .add_step(Step::cargo("fetch", vec![""]))
+            .add_step(Step::uses(
+                "superfly",
+                "flyctl-actions/setup-flyctl",
+                "master",
+            ))
+            .add_step(
+                Step::run(
+                    r#"sed -i.bak "s/version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml"#,
+                )
+                .env((
+                    "NEW_VERSION",
+                    "${{ needs.draft_release.outputs.create_release_name }}",
+                )),
+            )
+            // TODO: Make .env(...) type safe
+            .add_step(
+                Step::run("echo $CRATES_TOKEN | cargo login")
+                    .env(("CRATES_TOKEN", "${{ secrets.CRATES_TOKEN }}")),
+            )
+            .add_step(
+                Step::cargo("publish", vec!["--token $CRATES_TOKEN"])
+                    .env(("CRATES_TOKEN", "${{ secrets.CRATES_TOKEN }}")),
+            )
+            .add_step(
+                Step::run("flyctl deploy --remote-only")
+                    .env(("FLY_API_TOKEN", "${{ secrets.FLY_API_TOKEN }}")),
+            );
+
+        workflow = workflow.add_job("draft_release", draft_release);
+        workflow = workflow.add_job("release", release_job);
+
+        workflow
+    }
+
     pub fn add_job<T: ToString, J: Into<Job>>(mut self, id: T, job: J) -> Self {
         let key = id.to_string();
 
@@ -84,6 +155,8 @@ impl Workflow {
         let build_job = Job::new("Build and Test")
             .add_step(Step::checkout())
             .add_step(
+                // TODO: maybe ToolchainStep::default() should setup
+                // stable by default
                 Step::setup_rust()
                     .with_stable_toolchain()
                     .with_nightly_toolchain()
@@ -156,6 +229,7 @@ pub struct Job {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permissions: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[setters(skip)]
     pub outputs: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<Concurrency>,
@@ -185,6 +259,10 @@ impl Job {
             runs_on: Some(RunsOn(Value::from("ubuntu-latest"))),
             ..Default::default()
         }
+    }
+
+    pub fn outputs<S: AddOutput>(self, output: S) -> Self {
+        output.apply(self)
     }
 
     pub fn add_step<S: AddStep>(self, step: S) -> Self {
@@ -356,14 +434,32 @@ impl Step<Run> {
     }
 }
 
+pub struct Version(String);
+
+impl From<&str> for Version {
+    fn from(value: &str) -> Self {
+        Version(value.to_string())
+    }
+}
+
+impl From<u32> for Version {
+    fn from(value: u32) -> Self {
+        Version(format!("v{}", value))
+    }
+}
+
 impl Step<Use> {
-    pub fn uses<Owner: ToString, Repo: ToString>(owner: Owner, repo: Repo, version: u64) -> Self {
+    pub fn uses<Owner: ToString, Repo: ToString, Ver: Into<Version>>(
+        owner: Owner,
+        repo: Repo,
+        version: Ver,
+    ) -> Self {
         Step {
             uses: Some(format!(
-                "{}/{}@v{}",
+                "{}/{}@{}",
                 owner.to_string(),
                 repo.to_string(),
-                version
+                version.into().0,
             )),
             ..Default::default()
         }
@@ -474,11 +570,34 @@ pub trait AddStep {
     fn apply(self, job: Job) -> Job;
 }
 
+pub trait AddOutput {
+    fn apply(self, job: Job) -> Job;
+}
+
+impl<S: ToString, S1: ToString> AddOutput for (S, S1) {
+    fn apply(self, mut job: Job) -> Job {
+        let mut outputs = job.outputs.unwrap_or_default();
+        outputs.insert(self.0.to_string(), self.1.to_string());
+
+        job.outputs = Some(outputs);
+        job
+    }
+}
+
 impl<S1: Display, S2: Display> SetEnv<Step<Use>> for (S1, S2) {
     fn apply(self, mut step: Step<Use>) -> Step<Use> {
-        let mut index_map: IndexMap<String, Value> = step.with.unwrap_or_default();
-        index_map.insert(self.0.to_string(), Value::String(self.1.to_string()));
-        step.with = Some(index_map);
+        let mut index_map: IndexMap<String, String> = step.env.unwrap_or_default();
+        index_map.insert(self.0.to_string(), self.1.to_string());
+        step.env = Some(index_map);
+        step
+    }
+}
+
+impl<S1: Display, S2: Display> SetEnv<Step<Run>> for (S1, S2) {
+    fn apply(self, mut step: Step<Run>) -> Step<Run> {
+        let mut index_map: IndexMap<String, String> = step.env.unwrap_or_default();
+        index_map.insert(self.0.to_string(), self.1.to_string());
+        step.env = Some(index_map);
         step
     }
 }

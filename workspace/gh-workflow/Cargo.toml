@@ -10,7 +10,6 @@ homepage = "https://github.com/tailcallhq/rust-gh-workflows"
 repository = "https://github.com/tailcallhq/rust-gh-workflows"
 
 [dependencies]
-async-trait = "0.1.83"
 derive_more = { version = "1.0.0", features = ["from"] }
 derive_setters = "0.1.6"
 indexmap = { version = "2.6.0", features = ["serde"] }
@@ -20,5 +19,4 @@ serde_json = { version = "1.0.128" }
 serde_yaml = "0.9.34"
 
 [dev-dependencies]
-insta = "1.40.0"
 pretty_assertions = "1.4.1"

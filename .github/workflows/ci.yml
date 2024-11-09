@@ -49,3 +49,49 @@ jobs:
       run: cargo +nightly fmt --check
     - name: Cargo Clippy
       run: cargo +nightly clippy --all-features --workspace -- -D warnings
+  draft_release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Draft release
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+    - id: create_release
+      uses: release-drafter/release-drafter@v6
+      with:
+        config-name: release-drafter.yml
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - id: set_output
+      name: Set Output for Later Jobs
+      run: echo "create_release_name=${{ steps.create_release.outputs.name }}" >> $GITHUB_OUTPUT && echo "create_release_id=${{ steps.create_release.outputs.id }}" >> $GITHUB_OUTPUT
+    permissions:
+      contents: write
+    outputs:
+      create_release_name: ${{ steps.set_output.outputs.create_release_name }}
+      create_release_id: ${{ steps.set_output.outputs.create_release_id }}
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+    - name: Setup Rust Toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+    - run: 'cargo fetch '
+    - uses: superfly/flyctl-actions/setup-flyctl@master
+    - run: sed -i.bak "s/version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+      env:
+        NEW_VERSION: ${{ needs.draft_release.outputs.create_release_name }}
+    - run: echo $CRATES_TOKEN | cargo login
+      env:
+        CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
+    - run: cargo publish --token $CRATES_TOKEN
+      env:
+        CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
+    - run: flyctl deploy --remote-only
+      env:
+        FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

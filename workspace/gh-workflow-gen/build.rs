@@ -1,5 +1,5 @@
 use gh_workflow::*;
 
 fn main() {
-    Workflow::setup_rust().generate().unwrap();
+    Workflow::setup_rust().autorelease_crate().generate().unwrap();
 }
