@@ -5,7 +5,7 @@ use std::fmt::Display;
 use derive_setters::Setters;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::error::Result;
 use crate::generate::Generate;
@@ -133,6 +133,10 @@ pub enum ActivityType {
     Deleted,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(transparent)]
+pub struct RunsOn(Value);
+
 #[derive(Debug, Setters, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 #[setters(strip_option)]
@@ -145,7 +149,7 @@ pub struct Job {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[setters(skip)]
-    pub runs_on: Option<Value>,
+    pub runs_on: Option<RunsOn>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strategy: Option<Strategy>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -183,7 +187,7 @@ impl Job {
     pub fn new<T: ToString>(name: T) -> Self {
         Self {
             name: Some(name.to_string()),
-            runs_on: Some(Value::from("ubuntu-latest")),
+            runs_on: Some(RunsOn(Value::from("ubuntu-latest"))),
             ..Default::default()
         }
     }
@@ -192,7 +196,7 @@ impl Job {
         step.apply(self)
     }
 
-    pub fn runs_on<T: SetEnv<Self>>(self, a: T) -> Self {
+    pub fn runs_on<T: AddRunsOn>(self, a: T) -> Self {
         a.apply(self)
     }
 
@@ -201,7 +205,42 @@ impl Job {
     }
 }
 
-impl<T: Into<Value>> SetRunner for T {
+pub trait AddRunsOn {
+    fn apply(self, job: Job) -> Job;
+}
+
+impl From<&str> for RunsOn {
+    fn from(value: &str) -> Self {
+        RunsOn(Value::String(value.to_string()))
+    }
+}
+
+impl From<Vec<&str>> for RunsOn {
+    fn from(value: Vec<&str>) -> Self {
+        RunsOn(Value::Array(
+            value
+                .into_iter()
+                .map(|v| v.to_string())
+                .map(Value::String)
+                .collect(),
+        ))
+    }
+}
+
+impl<V: Into<RunsOn>> AddRunsOn for Vec<(&str, V)> {
+    fn apply(self, mut job: Job) -> Job {
+        let val = self.into_iter().map(|(a, b)| (a.to_string(), b.into()));
+        let mut map = Map::new();
+        for (k, v) in val {
+            map.insert(k.to_string(), v.0);
+        }
+
+        job.runs_on = Some(RunsOn(Value::Object(map)));
+        job
+    }
+}
+
+impl<V: Into<RunsOn>> AddRunsOn for V {
     fn apply(self, mut job: Job) -> Job {
         job.runs_on = Some(self.into());
         job
